@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TweetMood</title>
+  <style>
+    body { font: 15px/1.5 -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f5f8fa; color: #14171a; }
+    header { background: #1da1f2; color: #fff; padding: 14px 24px; } header h1 { margin: 0; font-size: 22px; }
+    main { max-width: 1000px; margin: 20px auto; padding: 0 16px; display: grid; gap: 16px; }
+    .card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    textarea { width: 100%; min-height: 70px; padding: 8px; font: inherit; box-sizing: border-box; }
+    button { background: #1da1f2; color: #fff; border: 0; padding: 8px 16px; border-radius: 18px; cursor: pointer; font-weight: 600; }
+    .label { display: inline-block; padding: 2px 10px; border-radius: 10px; font-weight: 600; }
+    .positive { background: #e3f6ea; color: #17803d; } .negative { background: #fde8ea; color: #c4182a; } .neutral { background: #eef1f4; color: #57606a; }
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; } .kpis div { text-align: center; } .kpis strong { font-size: 26px; display: block; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    table { width: 100%; border-collapse: collapse; } td { padding: 4px; border-bottom: 1px solid #eee; font-size: 13px; }
+    .muted { color: #657786; font-size: 13px; }
+  </style>
+</head>
+<body>
+<header><h1>TweetMood</h1></header>
+<main>
+  <section class="card">
+    <h2>Try it</h2>
+    <textarea id="text" placeholder="Paste a tweet… e.g. 'not impressed with the new update :('"></textarea>
+    <button id="go">Analyze</button>
+    <div id="single"></div>
+  </section>
+
+  <section class="card">
+    <h2>Analyze a CSV</h2>
+    <p class="muted">Columns: <code>text</code> (required), <code>created_at</code> (optional, ISO or Twitter format).</p>
+    <input type="file" id="file" accept=".csv"> <button id="upload">Upload</button>
+  </section>
+
+  <section id="results" hidden>
+    <div class="card kpis">
+      <div><strong id="k-total"></strong><span class="muted">tweets</span></div>
+      <div><strong id="k-pos" class="positive"></strong><span class="muted">positive</span></div>
+      <div><strong id="k-neg" class="negative"></strong><span class="muted">negative</span></div>
+      <div><strong id="k-pol"></strong><span class="muted">avg polarity</span></div>
+    </div>
+    <div class="card"><canvas id="timeline" height="90"></canvas></div>
+    <div class="grid2">
+      <div class="card"><h3>Hashtags</h3><table id="tags"></table></div>
+      <div class="card"><h3>Most negative</h3><table id="worst"></table></div>
+    </div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let chart;
+
+$("go").onclick = async () => {
+  const text = $("text").value.trim();
+  if (!text) return;
+  const res = await fetch("/api/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const body = await res.json();
+  if (!res.ok) { $("single").textContent = body.error; return; }
+  const p = body.predictions[0];
+  $("single").innerHTML = `<p><span class="label ${p.label}">${p.label}</span> ${(p.confidence * 100).toFixed(0)}% confident · polarity ${p.polarity.toFixed(2)}</p>`;
+};
+
+$("upload").onclick = async () => {
+  const file = $("file").files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/analyze", { method: "POST", body: form });
+  const s = await res.json();
+  if (!res.ok) { alert(s.error); return; }
+  $("results").hidden = false;
+  $("k-total").textContent = s.total;
+  $("k-pos").textContent = s.counts.positive;
+  $("k-neg").textContent = s.counts.negative;
+  $("k-pol").textContent = s.avg_polarity.toFixed(2);
+  $("tags").innerHTML = s.hashtags.map((t) => `<tr><td>#${esc(t.tag)}</td><td>${t.count}</td><td class="${t.avg_polarity >= 0 ? "positive" : "negative"}">${t.avg_polarity}</td></tr>`).join("");
+  $("worst").innerHTML = s.most_negative.map((r) => `<tr><td>${esc(r.text)}</td><td>${r.polarity}</td></tr>`).join("");
+
+  chart?.destroy();
+  chart = new Chart($("timeline"), {
+    data: {
+      labels: s.timeline.map((t) => t.bucket),
+      datasets: [
+        { type: "line", label: "avg polarity", data: s.timeline.map((t) => t.avg_polarity), yAxisID: "y", borderColor: "#1da1f2", tension: 0.3 },
+        { type: "bar", label: "tweets", data: s.timeline.map((t) => t.count), yAxisID: "y1", backgroundColor: "rgba(101,119,134,.25)" },
+      ],
+    },
+    options: { scales: { y: { min: -1, max: 1 }, y1: { position: "right", grid: { drawOnChartArea: false } } } },
+  });
+};
+</script>
+</body>
+</html>
